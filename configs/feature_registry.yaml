@@ -1,0 +1,17 @@
+entities:
+  - name: driver
+    join_key: driver_id
+    description: Taxi driver
+
+feature_views:
+  - name: driver_stats
+    entity: driver
+    source: data/driver_stats.parquet
+    ttl: 24h
+    features:
+      - name: trip_count
+        dtype: int64
+      - name: avg_fare
+        dtype: float64
+      - name: avg_trip_duration_minutes
+        dtype: float64

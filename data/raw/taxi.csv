@@ -1,0 +1,6 @@
+driver_id,fare_amount,trip_duration_minutes
+d1,12.50,18
+d1,9.00,12
+d2,22.00,30
+d2,15.75,22
+d3,8.25,10
