@@ -4,6 +4,13 @@ A lightweight feature store in Go with Parquet-backed offline storage, Redis-bac
 
 This project focuses on the hardest correctness problem in feature stores: preventing training-time data leakage by ensuring every historical feature value existed before the prediction event.
 
+## Highlights
+
+- Built a Go-based feature store with Parquet offline storage and Redis online serving
+- Implemented point-in-time correct joins to prevent training data leakage
+- Added TTL filtering, latest-wins semantics, and offline/online consistency checks
+- Covered core behavior with 28 tests across unit and Redis-backed integration cases
+
 ## Architecture
 
 ```
