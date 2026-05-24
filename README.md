@@ -14,7 +14,7 @@ configs/feature_registry.yaml
 internal/registry     internal/offline       internal/online
   Load + Validate      Parquet read/write     Redis get/set/bulk
         │                      │                     │
-        └──────────┬────────────┘                     │
+        └──────────┬───────────┘                     │
                    │                                 │
           internal/materialization ─────────────────►┘
           cmd/materialize                 populates both stores
