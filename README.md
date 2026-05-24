@@ -14,7 +14,7 @@ configs/feature_registry.yaml
 internal/registry     internal/offline       internal/online
   Load + Validate      Parquet read/write     Redis get/set/bulk
         │                      │                     │
-        └──────────┬─────────��─┘                     │
+        └──────────┬────────────┘                     │
                    │                                 │
           internal/materialization ─────────────────►┘
           cmd/materialize                 populates both stores
@@ -23,14 +23,14 @@ internal/registry     internal/offline       internal/online
                    ▼
           internal/historical
           point-in-time join
-                   ��
+                   │
                    ▼
           internal/server
           cmd/server :8080
           ┌────────────────────────────────┐
           │ GET  /features/online          │  Redis lookup
           │ POST /features/historical      │  Parquet join
-          └────────────────���───────────────┘
+          └────────────────────────────────┘
 ```
 
 | Package | Responsibility |
