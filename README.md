@@ -9,7 +9,7 @@ This project focuses on the hardest correctness problem in feature stores: preve
 - Built a Go-based feature store with Parquet offline storage and Redis online serving
 - Implemented point-in-time correct joins to prevent training data leakage
 - Added TTL filtering, latest-wins semantics, and offline/online consistency checks
-- Covered core behavior with 28 tests across unit and Redis-backed integration cases
+- Covered core behavior with 37 test cases across unit and Redis-backed integration tests
 
 ## Architecture
 
