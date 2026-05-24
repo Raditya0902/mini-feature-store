@@ -1,6 +1,8 @@
-# mini-feature-store
+# Mini Feature Store: Point-in-Time Correct ML Features in Go
 
-A feature store in Go that demonstrates the core mechanics of offline/online serving and point-in-time correct historical joins, using the NYC Taxi dataset. Point-in-time correctness is the central challenge in ML feature stores: when building a training dataset, you must only use feature values that were available *at the moment the event occurred* — using data from after the event leaks future information into your model and causes it to overperform in training while failing in production. This store enforces that guarantee by filtering out any feature row whose `feature_timestamp` exceeds the `event_timestamp` of the request, and discarding rows older than the configured TTL.
+A lightweight feature store in Go with Parquet-backed offline storage, Redis-backed online serving, a YAML feature registry, and point-in-time correct historical joins using NYC Taxi-style data.
+
+This project focuses on the hardest correctness problem in feature stores: preventing training-time data leakage by ensuring every historical feature value existed before the prediction event.
 
 ## Architecture
 
@@ -43,6 +45,15 @@ internal/registry     internal/offline       internal/online
 | `internal/server` | HTTP handlers, request/response schemas |
 | `cmd/materialize` | CLI: compute features and populate stores |
 | `cmd/server` | HTTP server on `:8080` |
+
+## Status
+- Offline store: implemented
+- Online store: implemented
+- Feature registry: implemented
+- Materialization: implemented
+- Point-in-time joins: implemented
+- REST API: implemented
+- Redis integration tests: implemented
 
 ## How to Run
 
