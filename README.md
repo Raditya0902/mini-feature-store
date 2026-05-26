@@ -211,6 +211,13 @@ With Redis running (`docker compose up -d`), 9 additional tests run:
 | `TestOnlineStore` | 4 | Redis Set/Get round-trip, missing key returns empty map, MGet mixed, overwrite |
 | `TestConsistency` | 3 | After `Materialize`, offline (Parquet) and online (Redis) values match for d1, d2, d3 |
 
+## Performance
+
+Point-in-time join over 100,000 feature rows (10,000 entities) with 1,000 entity events:
+- Join completed in: 63ms
+- Heap delta: -0.4 MB
+- Design note: current implementation loads all Parquet rows into memory. For production scale, partitioning by entity_id and predicate pushdown would reduce both latency and memory usage.
+
 ## Intentional scope
 
 S3, Kafka, Spark, and Airflow are deliberately excluded. The goal is to demonstrate the core correctness properties — point-in-time joins, TTL filtering, offline/online consistency — with the smallest possible stack. Adding a distributed compute layer or a message broker would obscure those mechanics without changing what the code proves. Authentication is excluded for the same reason: the API is a local development server, not a production service.
