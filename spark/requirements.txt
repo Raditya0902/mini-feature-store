@@ -1,1 +1,2 @@
-pyspark>=3.5.0
+pyspark==3.5.3
+# Requires Java 17. Java 21+ is not supported by PySpark 3.5.x.
