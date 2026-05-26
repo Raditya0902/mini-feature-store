@@ -81,7 +81,16 @@ pip install -r spark/requirements.txt
 python spark/materialize_features.py
 ```
 
-Reads `data/raw/taxi.csv`, computes per-driver aggregates using a Spark groupBy, and writes partitioned Parquet to `data/offline_store/driver_stats_spark.parquet/`. The same job runs on the full NYC Taxi dataset (~100M rows) by updating the input path.
+Reads `data/raw/taxi.csv`, computes per-driver aggregates using a Spark groupBy, and writes partitioned Parquet to `data/offline_store/driver_stats_spark.parquet/`.
+
+Supports two modes via the `MODE` environment variable:
+- `MODE=csv` (default): reads `data/raw/taxi.csv` for local development
+- `MODE=parquet`: reads a directory of Parquet files for large-scale runs
+
+Benchmarked on 3 months of the NYC Taxi dataset (9.5M rows):
+- Input rows: 9,554,778
+- Rows after filtering: 9,407,110
+- groupBy + write: 0.88s on a single-node local Spark session (Apple M4, 16GB RAM)
 
 ## API
 
@@ -228,6 +237,8 @@ Point-in-time join over 100,000 feature rows (10,000 entities) with 1,000 entity
 - Join completed in: 63ms
 - Heap delta: -0.4 MB
 - Design note: current implementation loads all Parquet rows into memory. For production scale, partitioning by entity_id and predicate pushdown would reduce both latency and memory usage.
+
+Spark materialization (groupBy + Parquet write): 0.88s over 9.5M rows on a single-node local Spark session.
 
 ## Intentional scope
 
