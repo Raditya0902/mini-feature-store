@@ -6,7 +6,7 @@ This project focuses on the hardest correctness problem in feature stores: preve
 
 ## Highlights
 
-- Built a Go-based feature store with Parquet offline storage and Redis online serving
+- Built a Go-based feature store with Parquet offline storage, Redis online serving, and a PySpark materialization job for large-scale feature computation
 - Implemented point-in-time correct joins to prevent training data leakage
 - Added TTL filtering, latest-wins semantics, and offline/online consistency checks
 - Covered core behavior with 37 test cases across unit and Redis-backed integration tests
@@ -71,6 +71,17 @@ go run cmd/server/main.go
 ```
 
 `cmd/materialize` reads `data/raw/taxi.csv`, groups by `driver_id`, computes per-driver stats, and writes to `data/driver_stats.parquet` (offline) and Redis (online). `cmd/server` starts the REST API on `:8080`.
+
+## Spark Materialization
+
+A PySpark job is provided as an alternative to the Go materializer for large-scale feature computation.
+
+```bash
+pip install -r spark/requirements.txt
+python spark/materialize_features.py
+```
+
+Reads `data/raw/taxi.csv`, computes per-driver aggregates using a Spark groupBy, and writes partitioned Parquet to `data/offline_store/driver_stats_spark.parquet/`. The same job runs on the full NYC Taxi dataset (~100M rows) by updating the input path.
 
 ## API
 
