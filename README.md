@@ -231,4 +231,4 @@ Point-in-time join over 100,000 feature rows (10,000 entities) with 1,000 entity
 
 ## Intentional scope
 
-S3, Kafka, Spark, and Airflow are deliberately excluded. The goal is to demonstrate the core correctness properties — point-in-time joins, TTL filtering, offline/online consistency — with the smallest possible stack. Adding a distributed compute layer or a message broker would obscure those mechanics without changing what the code proves. Authentication is excluded for the same reason: the API is a local development server, not a production service.
+S3, Kafka, and Airflow are deliberately excluded. The goal is to demonstrate the core correctness properties — point-in-time joins, TTL filtering, offline/online consistency — with the smallest possible stack. A PySpark materialization job is provided for large-scale feature computation, but streaming ingestion and orchestration are out of scope. Authentication is excluded for the same reason: the API is a local development server, not a production service.
