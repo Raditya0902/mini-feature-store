@@ -1,0 +1,61 @@
+name: Go tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      REQUIRE_REDIS: "1"
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - name: Run Go tests and require zero skips
+        run: |
+          go test ./... -count=1 -json > "$RUNNER_TEMP/go-tests.json" || test_status=$?
+          python3 - "$RUNNER_TEMP/go-tests.json" <<'PY'
+          import json
+          import os
+          import sys
+
+          passed = set()
+          skipped = []
+          with open(sys.argv[1]) as results:
+              for line in results:
+                  event = json.loads(line)
+                  if "Output" in event:
+                      print(event["Output"], end="")
+                  if "Test" in event:
+                      test = (event["Package"], event["Test"])
+                      if event["Action"] == "pass":
+                          passed.add(test)
+                      elif event["Action"] == "skip":
+                          skipped.append(test)
+
+          parents = {(package, name.rsplit("/", 1)[0]) for package, name in passed if "/" in name}
+          summary = f"{len(passed - parents)} passing test cases (including leaf subtests), {len(skipped)} skips."
+          print(summary)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as report:
+              report.write(summary + "\n")
+          if skipped:
+              sys.exit("Unexpected test skips: " + ", ".join(f"{package}/{test}" for package, test in skipped))
+          PY
+          exit "${test_status:-0}"

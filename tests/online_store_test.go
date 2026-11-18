@@ -2,6 +2,7 @@ package tests
 
 import (
 	"context"
+	"os"
 	"reflect"
 	"testing"
 
@@ -17,6 +18,9 @@ func newTestStore(t *testing.T) *online.RedisStore {
 	c := redis.NewClient(&redis.Options{Addr: redisAddr})
 	defer c.Close()
 	if err := c.Ping(context.Background()).Err(); err != nil {
+		if os.Getenv("REQUIRE_REDIS") == "1" {
+			t.Fatalf("Redis required at %s: %v", redisAddr, err)
+		}
 		t.Skipf("Redis unavailable at %s: %v", redisAddr, err)
 	}
 	return online.NewRedisStore(redisAddr)

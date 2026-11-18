@@ -98,10 +98,7 @@ Supports two modes via the `MODE` environment variable:
 - `MODE=csv` (default): reads `data/raw/taxi.csv` for local development
 - `MODE=parquet`: reads a directory of Parquet files for large-scale runs
 
-Benchmarked on 3 months of the NYC Taxi dataset (9.5M rows):
-- Input rows: 9,554,778
-- Rows after filtering: 9,407,110
-- groupBy + write: 0.88s on a single-node local Spark session (Apple M4, 16GB RAM)
+Read, aggregate, and write took 2.29–2.43 s across three runs on the January–March 2024 NYC Taxi yellow-trip Parquet files (9,554,778 input rows). Each run used a fresh local Spark 3.5.3 session with `local[*]`, Java 17, and a new output path on an Apple M4 with 16 GB RAM. Timing starts before the input read and ends after the output write. Spark startup is outside the timed interval. See the [Spark run instructions](spark/README.md).
 
 ## API
 
@@ -166,7 +163,9 @@ Returns `400` on malformed JSON. Events without an eligible snapshot return `"fe
 go test ./... -v
 ```
 
-The suite covers registry validation, Parquet round trips, point-in-time join rules, and a CSV-to-Parquet-to-HTTP regression test. The Redis storage and offline/online consistency tests run when Redis is available at `localhost:6379`.
+The suite covers registry validation, Parquet round trips, point-in-time join rules, and a CSV-to-Parquet-to-HTTP regression test. A seeded randomized test compares the batched join with a naive reference using shuffled data, equal timestamps, gaps, and exact TTL boundaries.
+
+[GitHub Actions](.github/workflows/test.yml) runs the Go suite with a Redis 7 service on pushes and pull requests. To require Redis-backed storage and consistency checks locally, run `docker compose up -d --wait redis` followed by `REQUIRE_REDIS=1 go test ./... -v -count=1`.
 
 The scale test exercises 100,000 feature rows and 1,000 request events. Each request still scans the whole Parquet file in batches. The join retains request events and their current best matches as it scans, so it can answer from histories larger than the set of rows it needs to keep in memory.
 

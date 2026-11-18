@@ -16,15 +16,24 @@ Run from the project root so the default paths resolve correctly.
 
 ## What it does
 
-Reads `data/raw/taxi.csv`, groups by `driver_id`, and computes three aggregates:
-`trip_count`, `avg_fare`, and `avg_trip_duration_minutes`. Coalesces to one partition
-and writes Parquet to `data/offline_store/driver_stats_spark.parquet/`.
+CSV mode groups the bundled taxi data by `driver_id`. Parquet mode reads NYC
+Taxi yellow-trip data and groups by `VendorID`. Both modes compute
+`trip_count`, `avg_fare`, and `avg_trip_duration_minutes`, then coalesce to one
+partition and write a Parquet dataset. The Go historical API reads its own
+hourly snapshots.
 
-## Scaling to full NYC Taxi dataset
+## Reproduce the NYC Taxi timing
 
-Tested on the sample `taxi.csv`. The same job runs on the full NYC Taxi dataset
-(~100M rows) by setting the input path:
+Place the January, February, and March 2024 yellow-trip Parquet files in
+`data/raw/nyc_taxi/`. Use Java 17 and a fresh Spark process and output path for
+each run.
 
 ```bash
-INPUT_PATH=/path/to/full/taxi.csv python spark/materialize_features.py
+PYSPARK_SUBMIT_ARGS='--master local[*] pyspark-shell' \
+  MODE=parquet INPUT_PATH=data/raw/nyc_taxi/ \
+  OUTPUT_PATH="$(mktemp -d)/driver_stats" \
+  python spark/materialize_features.py
 ```
+
+The reported time covers reading the input, computing the aggregates, and
+writing the output. The timer starts after Spark creates its session.
