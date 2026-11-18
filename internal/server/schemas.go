@@ -12,14 +12,16 @@ type HistoricalRequest struct {
 }
 
 type OnlineResponse struct {
-	EntityID string         `json:"entity_id"`
-	Features map[string]any `json:"features"`
+	EntityID         string         `json:"entity_id"`
+	FeatureTimestamp *time.Time     `json:"feature_timestamp,omitempty"`
+	Features         map[string]any `json:"features"`
 }
 
 type TrainingRowResponse struct {
-	EntityID       string         `json:"entity_id"`
-	EventTimestamp time.Time      `json:"event_timestamp"`
-	Features       map[string]any `json:"features"`
+	EntityID         string         `json:"entity_id"`
+	EventTimestamp   time.Time      `json:"event_timestamp"`
+	FeatureTimestamp *time.Time     `json:"feature_timestamp,omitempty"`
+	Features         map[string]any `json:"features"`
 }
 
 type HistoricalResponse struct {

@@ -69,17 +69,29 @@ func TestPointInTimeAgainstOracle(t *testing.T) {
 				want := historical.TrainingRow{
 					EntityID:       event.EntityID,
 					EventTimestamp: event.EventTimestamp,
-					Features:       referenceFeatures(rows, event, ttl),
 				}
-				if !reflect.DeepEqual(got[i], want) {
-					t.Errorf("event %d: got %+v, want %+v", i, got[i], want)
+				if best := referenceSnapshot(rows, event, ttl); best != nil {
+					want.FeatureTimestamp = &best.FeatureTimestamp
+					want.Features = best.Values
 				}
+				row := got[i]
+				if row.EntityID != want.EntityID || !row.EventTimestamp.Equal(want.EventTimestamp) || !reflect.DeepEqual(row.Features, want.Features) {
+					t.Errorf("event %d: got row %s at %s with %v, want %s at %s with %v", i, row.EntityID, row.EventTimestamp, row.Features, want.EntityID, want.EventTimestamp, want.Features)
+				}
+				if want.FeatureTimestamp == nil {
+					if row.FeatureTimestamp != nil {
+						t.Errorf("event %d: got timestamp %s for a missing snapshot", i, row.FeatureTimestamp)
+					}
+				} else if row.FeatureTimestamp == nil || !row.FeatureTimestamp.Equal(*want.FeatureTimestamp) {
+					t.Errorf("event %d: got timestamp %v, want %s", i, row.FeatureTimestamp, want.FeatureTimestamp)
+				}
+				assertHistoricalTimestamp(t, row.FeatureTimestamp, event.EventTimestamp, ttl)
 			}
 		})
 	}
 }
 
-func referenceFeatures(rows []offline.FeatureRow, event historical.EntityEvent, ttl time.Duration) map[string]any {
+func referenceSnapshot(rows []offline.FeatureRow, event historical.EntityEvent, ttl time.Duration) *offline.FeatureRow {
 	earliest := event.EventTimestamp.Add(-ttl)
 	var best *offline.FeatureRow
 	for i := range rows {
@@ -92,8 +104,18 @@ func referenceFeatures(rows []offline.FeatureRow, event historical.EntityEvent, 
 			best = row
 		}
 	}
-	if best == nil {
-		return nil
+	return best
+}
+
+func assertHistoricalTimestamp(t *testing.T, snapshot *time.Time, event time.Time, ttl time.Duration) {
+	t.Helper()
+	if snapshot == nil {
+		return
 	}
-	return best.Values
+	if snapshot.After(event) {
+		t.Errorf("snapshot %s is after event %s", snapshot, event)
+	}
+	if age := event.Sub(*snapshot); age > ttl {
+		t.Errorf("snapshot %s is %v old at event %s, beyond TTL %v", snapshot, age, event, ttl)
+	}
 }

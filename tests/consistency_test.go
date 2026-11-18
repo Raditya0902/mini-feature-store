@@ -1,7 +1,10 @@
 package tests
 
 import (
+	"encoding/json"
 	"math"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
@@ -11,6 +14,7 @@ import (
 	"github.com/Raditya0902/mini-feature-store/internal/materialization"
 	"github.com/Raditya0902/mini-feature-store/internal/offline"
 	"github.com/Raditya0902/mini-feature-store/internal/registry"
+	"github.com/Raditya0902/mini-feature-store/internal/server"
 )
 
 const registryPath = "../configs/feature_registry.yaml"
@@ -80,6 +84,7 @@ func TestConsistency(t *testing.T) {
 			if len(trainingRows) != 1 {
 				t.Fatalf("expected 1 training row, got %d", len(trainingRows))
 			}
+			assertHistoricalTimestamp(t, trainingRows[0].FeatureTimestamp, asOf, view.TTL.Duration)
 			offlineFeatures := trainingRows[0].Features
 			if offlineFeatures == nil {
 				t.Fatal("offline features are nil (TTL may have filtered the row)")
@@ -99,6 +104,28 @@ func TestConsistency(t *testing.T) {
 			assertFloatFeature(t, "online", "avg_trip_duration_minutes", onlineFeatures, want.avgDur)
 		})
 	}
+
+	t.Run("online returns latest closed snapshot timestamp", func(t *testing.T) {
+		mux := http.NewServeMux()
+		server.NewServer(onlineStore, offlineStore, reg).RegisterRoutes(mux)
+		res := httptest.NewRecorder()
+		mux.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/features/online?entity_id=d1", nil))
+		if res.Code != http.StatusOK {
+			t.Fatalf("online request: status %d, body %s", res.Code, res.Body)
+		}
+		var response struct {
+			EntityID         string         `json:"entity_id"`
+			FeatureTimestamp string         `json:"feature_timestamp"`
+			Features         map[string]any `json:"features"`
+		}
+		if err := json.Unmarshal(res.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		if response.EntityID != "d1" || response.FeatureTimestamp != asOf.Format(time.RFC3339) {
+			t.Errorf("got entity %q and timestamp %q, want d1 at %s", response.EntityID, response.FeatureTimestamp, asOf)
+		}
+		assertFloatFeature(t, "online", "avg_fare", response.Features, expected["d1"].avgFare)
+	})
 }
 
 func assertFloatFeature(t *testing.T, store, name string, features map[string]any, want float64) {

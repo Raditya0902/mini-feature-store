@@ -83,9 +83,10 @@ func TestPointInTimeScale(t *testing.T) {
 	}
 
 	for i, row := range results {
-		if row.EntityID != events[i].EntityID || row.Features == nil {
+		if row.EntityID != events[i].EntityID || row.Features == nil || row.FeatureTimestamp == nil {
 			t.Fatalf("event %d: expected features for %q, got %+v", i, events[i].EntityID, row)
 		}
+		assertHistoricalTimestamp(t, row.FeatureTimestamp, events[i].EventTimestamp, SCALE_TTL)
 	}
 
 	t.Logf("elapsed: %s", elapsed)

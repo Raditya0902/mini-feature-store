@@ -2,13 +2,18 @@ package tests
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"reflect"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 
 	"github.com/Raditya0902/mini-feature-store/internal/online"
+	"github.com/Raditya0902/mini-feature-store/internal/server"
 )
 
 const redisAddr = "localhost:6379"
@@ -58,16 +63,22 @@ func TestOnlineStore(t *testing.T) {
 		if err := store.Set("online-mget-e1", features); err != nil {
 			t.Fatalf("Set: %v", err)
 		}
+		if err := store.SetSnapshot("online-mget-e2", time.Unix(0, 0), features); err != nil {
+			t.Fatalf("SetSnapshot: %v", err)
+		}
 
-		result, err := store.MGet([]string{"online-mget-e1", "online-mget-e2-missing"})
+		result, err := store.MGet([]string{"online-mget-e1", "online-mget-e2", "online-mget-e3-missing"})
 		if err != nil {
 			t.Fatalf("MGet: %v", err)
 		}
 		if !reflect.DeepEqual(result["online-mget-e1"], features) {
 			t.Errorf("e1: got %v, want %v", result["online-mget-e1"], features)
 		}
-		if result["online-mget-e2-missing"] != nil {
-			t.Errorf("e2: expected nil, got %v", result["online-mget-e2-missing"])
+		if !reflect.DeepEqual(result["online-mget-e2"], features) {
+			t.Errorf("e2: got %v, want %v", result["online-mget-e2"], features)
+		}
+		if result["online-mget-e3-missing"] != nil {
+			t.Errorf("e3: expected nil, got %v", result["online-mget-e3-missing"])
 		}
 	})
 
@@ -86,6 +97,33 @@ func TestOnlineStore(t *testing.T) {
 		}
 		if !reflect.DeepEqual(got, v2) {
 			t.Errorf("got %v, want %v", got, v2)
+		}
+	})
+
+	t.Run("online omits unavailable timestamps", func(t *testing.T) {
+		legacy := map[string]any{"avg_fare": float64(12.5)}
+		if err := store.Set("online-legacy", legacy); err != nil {
+			t.Fatal(err)
+		}
+		mux := http.NewServeMux()
+		server.NewServer(store, nil, nil).RegisterRoutes(mux)
+		for entity, features := range map[string]map[string]any{
+			"online-legacy":           legacy,
+			"online-missing-snapshot": {},
+		} {
+			res := httptest.NewRecorder()
+			mux.ServeHTTP(res, httptest.NewRequest(http.MethodGet, "/features/online?entity_id="+entity, nil))
+			if res.Code != http.StatusOK {
+				t.Fatalf("online request for %q: status %d, body %s", entity, res.Code, res.Body)
+			}
+			var got map[string]any
+			if err := json.Unmarshal(res.Body.Bytes(), &got); err != nil {
+				t.Fatal(err)
+			}
+			want := map[string]any{"entity_id": entity, "features": features}
+			if !reflect.DeepEqual(got, want) {
+				t.Errorf("got %v, want %v", got, want)
+			}
 		}
 	})
 }

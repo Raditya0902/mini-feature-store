@@ -55,7 +55,7 @@ func Materialize(
 		}
 	}
 	for _, row := range latest {
-		if err := onlineStore.Set(row.EntityID, row.Values); err != nil {
+		if err := onlineStore.SetSnapshot(row.EntityID, row.FeatureTimestamp, row.Values); err != nil {
 			return fmt.Errorf("writing online store for %q: %w", row.EntityID, err)
 		}
 	}

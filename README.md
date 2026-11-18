@@ -69,7 +69,7 @@ These commands use the checked-in `data/raw/taxi.csv` and work without Redis. Th
 | 2025-01-02 12:00:01 | d1 | — | — | — |
 | 2025-01-03 12:00 | d1 | 1 | 30 | 24 |
 
-The CSV requires `driver_id`, `fare_amount`, `trip_duration_minutes`, and `completed_at` (RFC 3339 with a timezone). A trip belongs to the UTC hour in which it completed. Each nonempty interval `[start, end)` produces one snapshot per driver at `end`. A trip completed at 11:00 contributes to the 12:00 snapshot, since it falls in the 11:00–12:00 window. The snapshot time assumes completed trips are available by the end of their hour.
+The CSV requires `driver_id`, `fare_amount`, `trip_duration_minutes`, and `completed_at` (RFC 3339 with a timezone). A trip belongs to the UTC hour in which it completed. Each nonempty interval `[start, end)` produces one snapshot per driver at `end`. A trip completed at 11:00 contributes to the 12:00 snapshot, since it falls in the 11:00–12:00 window.
 
 Materialization replaces `data/driver_stats.parquet` with snapshots rebuilt from the supplied CSV. Use `-input /path/to/taxi.csv` to choose a different source and include every period you want to keep in the offline store. Re-run materialization to regenerate Parquet files from the earlier single-snapshot format.
 
@@ -98,13 +98,13 @@ Supports two modes via the `MODE` environment variable:
 - `MODE=csv` (default): reads `data/raw/taxi.csv` for local development
 - `MODE=parquet`: reads a directory of Parquet files for large-scale runs
 
-Read, aggregate, and write took 2.29–2.43 s across three runs on the January–March 2024 NYC Taxi yellow-trip Parquet files (9,554,778 input rows). Each run used a fresh local Spark 3.5.3 session with `local[*]`, Java 17, and a new output path on an Apple M4 with 16 GB RAM. Timing starts before the input read and ends after the output write. Spark startup is outside the timed interval. See the [Spark run instructions](spark/README.md).
+Read, aggregate, and write took 2.29–2.43 s across three runs on the January–March 2024 NYC Taxi yellow-trip Parquet files (9,554,778 input rows). Each run used a fresh single-node local Spark 3.5.3 session with `local[*]`, Java 17, and a new output path on an Apple M4 with 16 GB RAM. Timing starts before the input read and ends after the output write. Spark startup is outside the timed interval. See the [Spark run instructions](spark/README.md).
 
 ## API
 
 ### GET /features/online
 
-Returns the latest snapshot published to Redis for the requested driver.
+Returns the latest snapshot published to Redis for the requested driver. `feature_timestamp` gives the snapshot's UTC hour-end time as an RFC 3339 string.
 
 ```bash
 curl "http://localhost:8080/features/online?entity_id=d1"
@@ -113,6 +113,7 @@ curl "http://localhost:8080/features/online?entity_id=d1"
 ```json
 {
   "entity_id": "d1",
+  "feature_timestamp": "2025-01-03T12:00:00Z",
   "features": {
     "avg_fare": 30,
     "avg_trip_duration_minutes": 24,
@@ -121,11 +122,11 @@ curl "http://localhost:8080/features/online?entity_id=d1"
 }
 ```
 
-Returns `404` when the query omits `entity_id` and `200` with `"features": {}` when Redis has no snapshot for the driver. The historical TTL applies to as-of joins. Redis serves the last value published for each driver until the next update.
+Returns `404` when the query omits `entity_id` and `200` with `"features": {}` and no `feature_timestamp` when Redis has no snapshot for the driver. Older Redis entries still return their feature values and omit the timestamp. Re-run materialization to publish timestamped snapshots. The historical TTL applies to as-of joins. Redis serves the last value published for each driver until the next update.
 
 ### POST /features/historical
 
-For each event, the API selects the newest snapshot with a timestamp at or before the event and an age of at most 24 hours. The 24-hour TTL comes from the registry and is relative to the event timestamp. Historical queries can use any date covered by the input data.
+For each event, the API selects the newest snapshot with a timestamp at or before the event and an age of at most 24 hours. The 24-hour TTL comes from the registry and is relative to the event timestamp. Historical queries can use any date covered by the input data. Each matched row returns the selected snapshot's `feature_timestamp` as an RFC 3339 UTC string.
 
 ```bash
 curl -X POST http://localhost:8080/features/historical \
@@ -144,18 +145,20 @@ curl -X POST http://localhost:8080/features/historical \
     {
       "entity_id": "d1",
       "event_timestamp": "2025-01-01T11:00:00Z",
+      "feature_timestamp": "2025-01-01T11:00:00Z",
       "features": {"avg_fare": 10.75, "avg_trip_duration_minutes": 15, "trip_count": 2}
     },
     {
       "entity_id": "d1",
       "event_timestamp": "2025-01-01T12:00:00Z",
+      "feature_timestamp": "2025-01-01T12:00:00Z",
       "features": {"avg_fare": 24, "avg_trip_duration_minutes": 30, "trip_count": 1}
     }
   ]
 }
 ```
 
-Returns `400` on malformed JSON. Events without an eligible snapshot return `"features": {}`. The response follows request order.
+Returns `400` on malformed JSON. Events without an eligible snapshot return `"features": {}` and omit `feature_timestamp`. The response follows request order.
 
 ## Tests and scaling
 
@@ -163,11 +166,15 @@ Returns `400` on malformed JSON. Events without an eligible snapshot return `"fe
 go test ./... -v
 ```
 
-The suite covers registry validation, Parquet round trips, point-in-time join rules, and a CSV-to-Parquet-to-HTTP regression test. A seeded randomized test compares the batched join with a naive reference using shuffled data, equal timestamps, gaps, and exact TTL boundaries.
+With Redis required, the suite runs 38 test cases, counting each standalone test or leaf subtest once. It covers registry validation, Parquet round trips, point-in-time join rules, and a CSV-to-Parquet-to-HTTP regression test. A seeded randomized test compares the batched join with a naive reference using shuffled data, equal timestamps, gaps, and exact TTL boundaries.
 
-[GitHub Actions](.github/workflows/test.yml) runs the Go suite with a Redis 7 service on pushes and pull requests. To require Redis-backed storage and consistency checks locally, run `docker compose up -d --wait redis` followed by `REQUIRE_REDIS=1 go test ./... -v -count=1`.
+[GitHub Actions](.github/workflows/test.yml) runs `go vet` and the Go test suite with a Redis 7 service on pushes and pull requests. The workflow fails if any test is skipped. To require Redis-backed storage and consistency checks locally, run `docker compose up -d --wait redis` followed by `REQUIRE_REDIS=1 go test ./... -v -count=1`.
 
 The scale test exercises 100,000 feature rows and 1,000 request events. Each request still scans the whole Parquet file in batches. The join retains request events and their current best matches as it scans, so it can answer from histories larger than the set of rows it needs to keep in memory.
+
+## Known limitations
+
+Snapshot eligibility assumes each trip is available by the end of the UTC hour in which it completed. Handling late arrivals would require an arrival-time column to record when each trip became available.
 
 ## Intentional scope
 

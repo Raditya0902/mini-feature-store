@@ -48,13 +48,21 @@ func (s *Server) handleOnline(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	features, err := s.online.Get(entityID)
+	snapshot, err := s.online.GetSnapshot(entityID)
 	if err != nil {
 		http.Error(w, "internal error", http.StatusInternalServerError)
 		return
 	}
 
-	writeJSON(w, http.StatusOK, OnlineResponse{EntityID: entityID, Features: features})
+	features := snapshot.Features
+	if features == nil {
+		features = map[string]any{}
+	}
+	writeJSON(w, http.StatusOK, OnlineResponse{
+		EntityID:         entityID,
+		FeatureTimestamp: snapshot.FeatureTimestamp,
+		Features:         features,
+	})
 }
 
 func (s *Server) handleHistorical(w http.ResponseWriter, r *http.Request) {
@@ -102,9 +110,10 @@ func (s *Server) handleHistorical(w http.ResponseWriter, r *http.Request) {
 			features = map[string]any{}
 		}
 		rows[i] = TrainingRowResponse{
-			EntityID:       tr.EntityID,
-			EventTimestamp: tr.EventTimestamp,
-			Features:       features,
+			EntityID:         tr.EntityID,
+			EventTimestamp:   tr.EventTimestamp,
+			FeatureTimestamp: tr.FeatureTimestamp,
+			Features:         features,
 		}
 	}
 
