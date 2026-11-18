@@ -142,6 +142,10 @@ func TestPointInTime(t *testing.T) {
 			}
 
 			for i, want := range tc.wantRows {
+				if (got[i].FeatureTimestamp == nil) != (want.Features == nil) {
+					t.Errorf("row %d FeatureTimestamp: got %v for expected features %v", i, got[i].FeatureTimestamp, want.Features)
+				}
+				assertHistoricalTimestamp(t, got[i].FeatureTimestamp, tc.entityEvents[i].EventTimestamp, tc.ttl)
 				if got[i].EntityID != want.EntityID {
 					t.Errorf("row %d EntityID: got %q, want %q", i, got[i].EntityID, want.EntityID)
 				}

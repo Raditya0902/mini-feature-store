@@ -25,17 +25,17 @@ func TestMaterializedHistoryThroughAPI(t *testing.T) {
 	}
 
 	cases := []struct {
-		driver, timestamp string
-		want              driverExpected
+		driver, timestamp, snapshot string
+		want                        driverExpected
 	}{
-		{"d1", "2025-01-03T12:00:00Z", driverExpected{1, 30, 24}},
-		{"d1", "2025-01-01T10:59:59Z", driverExpected{}},
-		{"d1", "2025-01-01T11:00:00Z", driverExpected{2, 10.75, 15}},
-		{"d2", "2025-01-01T11:00:00Z", driverExpected{2, 18.875, 26}},
-		{"d1", "2025-01-01T11:59:59Z", driverExpected{2, 10.75, 15}},
-		{"d1", "2025-01-01T12:00:00Z", driverExpected{1, 24, 30}},
-		{"d1", "2025-01-02T12:00:00Z", driverExpected{1, 24, 30}},
-		{"d1", "2025-01-02T12:00:00.000000001Z", driverExpected{}},
+		{"d1", "2025-01-03T12:00:00Z", "2025-01-03T12:00:00Z", driverExpected{1, 30, 24}},
+		{"d1", "2025-01-01T10:59:59Z", "", driverExpected{}},
+		{"d1", "2025-01-01T11:00:00Z", "2025-01-01T11:00:00Z", driverExpected{2, 10.75, 15}},
+		{"d2", "2025-01-01T11:00:00Z", "2025-01-01T11:00:00Z", driverExpected{2, 18.875, 26}},
+		{"d1", "2025-01-01T11:59:59Z", "2025-01-01T11:00:00Z", driverExpected{2, 10.75, 15}},
+		{"d1", "2025-01-01T12:00:00Z", "2025-01-01T12:00:00Z", driverExpected{1, 24, 30}},
+		{"d1", "2025-01-02T12:00:00Z", "2025-01-01T12:00:00Z", driverExpected{1, 24, 30}},
+		{"d1", "2025-01-02T12:00:00.000000001Z", "", driverExpected{}},
 	}
 	var request server.HistoricalRequest
 	for _, tc := range cases {
@@ -71,11 +71,18 @@ func TestMaterializedHistoryThroughAPI(t *testing.T) {
 		if row.EntityID != tc.driver || !row.EventTimestamp.Equal(request.EntityEvents[i].EventTimestamp) {
 			t.Errorf("row %d: got %s at %v, want %s at %s", i, row.EntityID, row.EventTimestamp, tc.driver, tc.timestamp)
 		}
-		if tc.want.tripCount == 0 {
+		assertHistoricalTimestamp(t, row.FeatureTimestamp, row.EventTimestamp, 24*time.Hour)
+		if tc.snapshot == "" {
+			if row.FeatureTimestamp != nil {
+				t.Errorf("%s at %s: got timestamp %s for a missing snapshot", tc.driver, tc.timestamp, row.FeatureTimestamp)
+			}
 			if row.Features == nil || len(row.Features) != 0 {
 				t.Errorf("%s at %s: got %v, want empty features", tc.driver, tc.timestamp, row.Features)
 			}
 			continue
+		}
+		if row.FeatureTimestamp == nil || row.FeatureTimestamp.Format(time.RFC3339Nano) != tc.snapshot {
+			t.Errorf("%s at %s: got feature timestamp %v, want %s", tc.driver, tc.timestamp, row.FeatureTimestamp, tc.snapshot)
 		}
 		assertFloatFeature(t, tc.timestamp, "trip_count", row.Features, tc.want.tripCount)
 		assertFloatFeature(t, tc.timestamp, "avg_fare", row.Features, tc.want.avgFare)

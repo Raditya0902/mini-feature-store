@@ -16,9 +16,10 @@ type EntityEvent struct {
 }
 
 type TrainingRow struct {
-	EntityID       string
-	EventTimestamp time.Time
-	Features       map[string]any
+	EntityID         string
+	EventTimestamp   time.Time
+	FeatureTimestamp *time.Time
+	Features         map[string]any
 }
 
 func GetHistoricalFeatures(
@@ -63,6 +64,7 @@ func GetHistoricalFeatures(
 	}
 	for i, row := range best {
 		if row != nil {
+			result[i].FeatureTimestamp = &row.FeatureTimestamp
 			result[i].Features = row.Values
 		}
 	}

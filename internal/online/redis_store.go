@@ -1,10 +1,12 @@
 package online
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -12,6 +14,15 @@ import (
 type RedisStore struct {
 	client *redis.Client
 }
+
+type Snapshot struct {
+	Features         map[string]any `json:"features"`
+	FeatureTimestamp *time.Time     `json:"feature_timestamp"`
+}
+
+// The prefix distinguishes snapshots from legacy JSON feature maps, whatever
+// feature names those maps contain.
+const snapshotPrefix = "snapshot:v1:"
 
 func NewRedisStore(addr string) *RedisStore {
 	return &RedisStore{
@@ -24,29 +35,53 @@ func featureKey(entityID string) string {
 }
 
 func (s *RedisStore) Set(entityID string, features map[string]any) error {
-	data, err := json.Marshal(features)
+	return s.set(entityID, "", features)
+}
+
+func (s *RedisStore) SetSnapshot(entityID string, timestamp time.Time, features map[string]any) error {
+	timestamp = timestamp.UTC()
+	return s.set(entityID, snapshotPrefix, Snapshot{Features: features, FeatureTimestamp: &timestamp})
+}
+
+func (s *RedisStore) set(entityID, prefix string, value any) error {
+	data, err := json.Marshal(value)
 	if err != nil {
 		return fmt.Errorf("encoding features: %w", err)
 	}
-	if err := s.client.Set(context.Background(), featureKey(entityID), data, 0).Err(); err != nil {
+	if err := s.client.Set(context.Background(), featureKey(entityID), append([]byte(prefix), data...), 0).Err(); err != nil {
 		return fmt.Errorf("redis SET: %w", err)
 	}
 	return nil
 }
 
 func (s *RedisStore) Get(entityID string) (map[string]any, error) {
+	snapshot, err := s.GetSnapshot(entityID)
+	return snapshot.Features, err
+}
+
+func (s *RedisStore) GetSnapshot(entityID string) (Snapshot, error) {
 	data, err := s.client.Get(context.Background(), featureKey(entityID)).Bytes()
 	if errors.Is(err, redis.Nil) {
-		return map[string]any{}, nil
+		return Snapshot{Features: map[string]any{}}, nil
 	}
 	if err != nil {
-		return nil, fmt.Errorf("redis GET: %w", err)
+		return Snapshot{}, fmt.Errorf("redis GET: %w", err)
 	}
-	var features map[string]any
-	if err := json.Unmarshal(data, &features); err != nil {
-		return nil, fmt.Errorf("decoding features: %w", err)
+	snapshot, err := decodeSnapshot(data)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("decoding features: %w", err)
 	}
-	return features, nil
+	return snapshot, nil
+}
+
+func decodeSnapshot(data []byte) (Snapshot, error) {
+	var snapshot Snapshot
+	if value, ok := bytes.CutPrefix(data, []byte(snapshotPrefix)); ok {
+		err := json.Unmarshal(value, &snapshot)
+		return snapshot, err
+	}
+	err := json.Unmarshal(data, &snapshot.Features)
+	return snapshot, err
 }
 
 func (s *RedisStore) MGet(entityIDs []string) (map[string]map[string]any, error) {
@@ -70,11 +105,11 @@ func (s *RedisStore) MGet(entityIDs []string) (map[string]map[string]any, error)
 			result[entityIDs[i]] = nil
 			continue
 		}
-		var features map[string]any
-		if err := json.Unmarshal([]byte(val.(string)), &features); err != nil {
+		snapshot, err := decodeSnapshot([]byte(val.(string)))
+		if err != nil {
 			return nil, fmt.Errorf("decoding features for %q: %w", entityIDs[i], err)
 		}
-		result[entityIDs[i]] = features
+		result[entityIDs[i]] = snapshot.Features
 	}
 	return result, nil
 }

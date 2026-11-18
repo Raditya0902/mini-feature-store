@@ -12,9 +12,10 @@ import (
 )
 
 type trainingRowOutput struct {
-	EntityID       string         `json:"entity_id"`
-	EventTimestamp time.Time      `json:"event_timestamp"`
-	Features       map[string]any `json:"features"`
+	EntityID         string         `json:"entity_id"`
+	EventTimestamp   time.Time      `json:"event_timestamp"`
+	FeatureTimestamp *time.Time     `json:"feature_timestamp,omitempty"`
+	Features         map[string]any `json:"features"`
 }
 
 func main() {
@@ -56,9 +57,10 @@ func main() {
 			features = map[string]any{}
 		}
 		out, err := json.MarshalIndent(trainingRowOutput{
-			EntityID:       row.EntityID,
-			EventTimestamp: row.EventTimestamp,
-			Features:       features,
+			EntityID:         row.EntityID,
+			EventTimestamp:   row.EventTimestamp,
+			FeatureTimestamp: row.FeatureTimestamp,
+			Features:         features,
 		}, "", "  ")
 		if err != nil {
 			log.Fatalf("marshaling row for %q: %v", row.EntityID, err)

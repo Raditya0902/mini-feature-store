@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/rand"
 	"path/filepath"
-	"runtime"
 	"testing"
 	"time"
 
@@ -14,18 +13,18 @@ import (
 )
 
 const (
-	NUM_ENTITIES      = 10_000
-	ROWS_PER_ENTITY   = 10
-	TOTAL_ROWS        = NUM_ENTITIES * ROWS_PER_ENTITY
-	NUM_EVENTS        = 1_000
-	WINDOW_HOURS      = 24
-	SCALE_TTL         = 48 * time.Hour
-	SCALE_SOURCE      = "scale_driver_stats.parquet"
+	NUM_ENTITIES    = 10_000
+	ROWS_PER_ENTITY = 10
+	TOTAL_ROWS      = NUM_ENTITIES * ROWS_PER_ENTITY
+	NUM_EVENTS      = 1_000
+	WINDOW_HOURS    = 24
+	SCALE_TTL       = 48 * time.Hour
+	SCALE_SOURCE    = "scale_driver_stats.parquet"
 )
 
 func TestPointInTimeScale(t *testing.T) {
 	rng := rand.New(rand.NewSource(42))
-	base := time.Now().UTC().Add(-time.Duration(WINDOW_HOURS) * time.Hour)
+	base := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 
 	// Generate 100,000 feature rows: 10 per entity across 10,000 entities
 	featureRows := make([]offline.FeatureRow, 0, TOTAL_ROWS)
@@ -64,21 +63,15 @@ func TestPointInTimeScale(t *testing.T) {
 		entityIdx := rng.Intn(NUM_ENTITIES)
 		events[i] = historical.EntityEvent{
 			EntityID:       fmt.Sprintf("driver_%05d", entityIdx),
-			EventTimestamp: time.Now().UTC(),
+			EventTimestamp: base.Add(WINDOW_HOURS * time.Hour),
 		}
 	}
 
 	t.Logf("entities: %d, feature rows: %d, events: %d", NUM_ENTITIES, TOTAL_ROWS, NUM_EVENTS)
 
-	// Capture heap before
-	var memBefore, memAfter runtime.MemStats
-	runtime.ReadMemStats(&memBefore)
-
 	start := time.Now()
 	results, err := historical.GetHistoricalFeatures(store, view, events)
 	elapsed := time.Since(start)
-
-	runtime.ReadMemStats(&memAfter)
 
 	if err != nil {
 		t.Fatalf("GetHistoricalFeatures: %v", err)
@@ -89,10 +82,12 @@ func TestPointInTimeScale(t *testing.T) {
 		t.Fatalf("expected %d training rows, got %d", NUM_EVENTS, len(results))
 	}
 
-	heapDeltaBytes := int64(memAfter.HeapAlloc) - int64(memBefore.HeapAlloc)
-	mbDelta := float64(heapDeltaBytes) / (1024 * 1024)
+	for i, row := range results {
+		if row.EntityID != events[i].EntityID || row.Features == nil || row.FeatureTimestamp == nil {
+			t.Fatalf("event %d: expected features for %q, got %+v", i, events[i].EntityID, row)
+		}
+		assertHistoricalTimestamp(t, row.FeatureTimestamp, events[i].EventTimestamp, SCALE_TTL)
+	}
 
 	t.Logf("elapsed: %s", elapsed)
-	t.Logf("heap delta: %.1f MB", mbDelta)
-	t.Logf("scale: 100k rows / 1k events — join completed in %s, heap delta %.1f MB", elapsed, mbDelta)
 }

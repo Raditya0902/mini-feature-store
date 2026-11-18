@@ -17,6 +17,10 @@ spark = (
 )
 spark.sparkContext.setLogLevel("WARN")
 
+# Spark evaluates the aggregation during the write. Start before reading the
+# input so metadata discovery and CSV schema inference are included too.
+start = time.perf_counter()
+
 if MODE == "parquet":
     df_raw = spark.read.parquet(PARQUET_INPUT_PATH)
 
@@ -25,22 +29,11 @@ if MODE == "parquet":
         (unix_timestamp("tpep_dropoff_datetime") - unix_timestamp("tpep_pickup_datetime")) / 60,
     ).withColumn("entity_id", col("VendorID").cast("string"))
 
-    total_count = df.count()
-    print(f"Input rows: {total_count}")
-
     df_filtered = df.filter(
         (col("fare_amount") > 0)
         & (col("trip_duration_minutes") > 0)
         & (col("trip_duration_minutes") <= 300)
     )
-
-    filtered_count = df_filtered.count()
-    print(f"Rows after filtering: {filtered_count}")
-
-    unique_vendors = df_filtered.select("entity_id").distinct().count()
-    print(f"Unique VendorIDs: {unique_vendors}")
-
-    start = time.time()
 
     stats = (
         df_filtered.groupBy("entity_id")
@@ -51,12 +44,6 @@ if MODE == "parquet":
         )
         .coalesce(1)
     )
-
-    stats.write.mode("overwrite").parquet(OUTPUT_PATH)
-
-    elapsed = time.time() - start
-    print(f"groupBy + write: {elapsed:.2f}s")
-    print(f"Output: {OUTPUT_PATH}")
 
 else:
     df = spark.read.csv(CSV_INPUT_PATH, header=True, inferSchema=True)
@@ -71,9 +58,9 @@ else:
         .coalesce(1)
     )
 
-    stats.write.mode("overwrite").parquet(OUTPUT_PATH)
-
-    row_count = stats.count()
-    print(f"Wrote {row_count} driver rows to {OUTPUT_PATH}")
+stats.write.mode("overwrite").parquet(OUTPUT_PATH)
+elapsed = time.perf_counter() - start
+print(f"Read + aggregate + write: {elapsed:.2f}s")
+print(f"Output: {OUTPUT_PATH}")
 
 spark.stop()
