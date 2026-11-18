@@ -24,11 +24,13 @@ type driverExpected struct {
 func TestConsistency(t *testing.T) {
 	onlineStore := newTestStore(t)
 
-	csvContent := "driver_id,fare_amount,trip_duration_minutes\n" +
-		"d1,10.0,20.0\n" +
-		"d1,20.0,40.0\n" +
-		"d2,15.0,30.0\n" +
-		"d3,5.0,10.0\n"
+	csvContent := "driver_id,fare_amount,trip_duration_minutes,completed_at\n" +
+		"d1,10.0,20.0,2025-01-01T11:00:00Z\n" +
+		"d1,20.0,40.0,2025-01-01T11:30:00Z\n" +
+		"d1,99.0,99.0,2025-01-01T10:15:00Z\n" +
+		"d1,99.0,99.0,9999-01-01T10:15:00Z\n" +
+		"d2,15.0,30.0,2025-01-01T11:15:00Z\n" +
+		"d3,5.0,10.0,2025-01-01T11:15:00Z\n"
 
 	tempDir := t.TempDir()
 	csvPath := filepath.Join(tempDir, "taxi.csv")
@@ -64,12 +66,12 @@ func TestConsistency(t *testing.T) {
 		t.Fatal("driver_stats feature view not found in registry")
 	}
 
-	now := time.Now().UTC()
+	asOf := time.Date(2025, time.January, 1, 12, 0, 0, 0, time.UTC)
 
 	for driverID, want := range expected {
 		t.Run(driverID, func(t *testing.T) {
 			entityEvents := []historical.EntityEvent{
-				{EntityID: driverID, EventTimestamp: now},
+				{EntityID: driverID, EventTimestamp: asOf},
 			}
 			trainingRows, err := historical.GetHistoricalFeatures(offlineStore, *view, entityEvents)
 			if err != nil {
@@ -90,21 +92,11 @@ func TestConsistency(t *testing.T) {
 
 			assertFloatFeature(t, "offline", "trip_count", offlineFeatures, want.tripCount)
 			assertFloatFeature(t, "offline", "avg_fare", offlineFeatures, want.avgFare)
+			assertFloatFeature(t, "offline", "avg_trip_duration_minutes", offlineFeatures, want.avgDur)
 
 			assertFloatFeature(t, "online", "trip_count", onlineFeatures, want.tripCount)
 			assertFloatFeature(t, "online", "avg_fare", onlineFeatures, want.avgFare)
-
-			offlineFare := offlineFeatures["avg_fare"].(float64)
-			onlineFare := onlineFeatures["avg_fare"].(float64)
-			if math.Abs(offlineFare-onlineFare) > 1e-9 {
-				t.Errorf("consistency: avg_fare offline=%v online=%v", offlineFare, onlineFare)
-			}
-
-			offlineCount := offlineFeatures["trip_count"].(float64)
-			onlineCount := onlineFeatures["trip_count"].(float64)
-			if math.Abs(offlineCount-onlineCount) > 1e-9 {
-				t.Errorf("consistency: trip_count offline=%v online=%v", offlineCount, onlineCount)
-			}
+			assertFloatFeature(t, "online", "avg_trip_duration_minutes", onlineFeatures, want.avgDur)
 		})
 	}
 }

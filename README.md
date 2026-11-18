@@ -2,14 +2,13 @@
 
 A lightweight feature store in Go with Parquet-backed offline storage, Redis-backed online serving, a YAML feature registry, and point-in-time correct historical joins using NYC Taxi-style data.
 
-This project focuses on the hardest correctness problem in feature stores: preventing training-time data leakage by ensuring every historical feature value existed before the prediction event.
+The Go pipeline builds a history of hourly driver snapshots from completed trips. Historical lookups use the latest snapshot available at each prediction timestamp, subject to the feature view's TTL.
 
 ## Highlights
 
-- Built a Go-based feature store with Parquet offline storage, Redis online serving, and a PySpark materialization job for large-scale feature computation
-- Implemented point-in-time correct joins to prevent training data leakage
-- Added TTL filtering, latest-wins semantics, and offline/online consistency checks
-- Covered core behavior with 37 test cases across unit and Redis-backed integration tests
+- Event-time materialization keeps multiple snapshots per driver in Parquet and publishes the latest closed snapshot per driver to Redis.
+- Historical joins enforce snapshot availability and TTL while retaining at most one matching row per request event.
+- A fixed, timestamped taxi fixture demonstrates historical backfills through the same materializer and join used by the API.
 
 ## Architecture
 
@@ -21,12 +20,12 @@ configs/feature_registry.yaml
         │                      │                     │
         ▼                      ▼                     ▼
 internal/registry     internal/offline       internal/online
-  Load + Validate      Parquet read/write     Redis get/set/bulk
+  Load + Validate      Parquet scan/write     Redis get/set/bulk
         │                      │                     │
         └──────────┬───────────┘                     │
                    │                                 │
           internal/materialization ─────────────────►┘
-          cmd/materialize                 populates both stores
+          cmd/materialize                 offline history + latest in Redis
           (raw CSV → FeatureRows)
                    │
                    ▼
@@ -48,40 +47,52 @@ internal/registry     internal/offline       internal/online
 | `internal/offline` | Read and write Parquet files (`FeatureRow`) |
 | `internal/online` | Redis `Set` / `Get` / `MGet` |
 | `internal/historical` | Point-in-time join: leakage guard + TTL filter |
-| `internal/materialization` | CSV → `[]FeatureRow`, writes both stores |
+| `internal/materialization` | Completed trips → hourly snapshots in Parquet and latest snapshots in Redis |
 | `internal/server` | HTTP handlers, request/response schemas |
 | `cmd/materialize` | CLI: compute features and populate stores |
 | `cmd/server` | HTTP server on `:8080` |
 
-## Status
-- Offline store: implemented
-- Online store: implemented
-- Feature registry: implemented
-- Materialization: implemented
-- Point-in-time joins: implemented
-- REST API: implemented
-- Redis integration tests: implemented
+## Run the historical demo
 
-## How to Run
+```bash
+go run ./cmd/materialize -offline-only
+go run ./examples/generate_training_set.go
+```
+
+These commands use the checked-in `data/raw/taxi.csv` and work without Redis. The sample includes multiple hours for the same driver, with input deliberately out of chronological order.
+
+| Prediction timestamp (UTC) | Driver | Trips | Average fare | Average duration (minutes) |
+|---|---|---:|---:|---:|
+| 2025-01-01 10:59 | d1 | — | — | — |
+| 2025-01-01 11:00 | d1 | 2 | 10.75 | 15 |
+| 2025-01-01 12:00 | d1 | 1 | 24 | 30 |
+| 2025-01-02 12:00:01 | d1 | — | — | — |
+| 2025-01-03 12:00 | d1 | 1 | 30 | 24 |
+
+The CSV requires `driver_id`, `fare_amount`, `trip_duration_minutes`, and `completed_at` (RFC 3339 with a timezone). A trip belongs to the UTC hour in which it completed. Each nonempty interval `[start, end)` produces one snapshot per driver at `end`. A trip completed at 11:00 contributes to the 12:00 snapshot, since it falls in the 11:00–12:00 window. The snapshot time assumes completed trips are available by the end of their hour.
+
+Materialization replaces `data/driver_stats.parquet` with snapshots rebuilt from the supplied CSV. Use `-input /path/to/taxi.csv` to choose a different source and include every period you want to keep in the offline store. Re-run materialization to regenerate Parquet files from the earlier single-snapshot format.
+
+## Run the API with Redis
 
 ```bash
 docker compose up -d
-go run cmd/materialize/main.go
-go run cmd/server/main.go
+go run ./cmd/materialize
+go run ./cmd/server
 ```
 
-`cmd/materialize` reads `data/raw/taxi.csv`, groups by `driver_id`, computes per-driver stats, and writes to `data/driver_stats.parquet` (offline) and Redis (online). `cmd/server` starts the REST API on `:8080`.
+The normal materialization command publishes each driver's most recent closed snapshot from the input to Redis. For a historical rebuild that should leave Redis alone, use `-offline-only`. You can also start the server after offline-only materialization to use the historical endpoint without Redis.
 
 ## Spark Materialization
 
-A PySpark job is provided as an alternative to the Go materializer for large-scale feature computation.
+The PySpark job demonstrates batch aggregation on larger inputs. Its aggregate output uses a separate Parquet schema and is outside the Go historical serving path.
 
 ```bash
 pip install -r spark/requirements.txt
 python spark/materialize_features.py
 ```
 
-Reads `data/raw/taxi.csv`, computes per-driver aggregates using a Spark groupBy, and writes partitioned Parquet to `data/offline_store/driver_stats_spark.parquet/`.
+Reads `data/raw/taxi.csv`, computes per-driver aggregates using a Spark groupBy, and writes a Parquet dataset to `data/offline_store/driver_stats_spark.parquet/`.
 
 Supports two modes via the `MODE` environment variable:
 - `MODE=csv` (default): reads `data/raw/taxi.csv` for local development
@@ -96,7 +107,7 @@ Benchmarked on 3 months of the NYC Taxi dataset (9.5M rows):
 
 ### GET /features/online
 
-Online lookup from Redis — use this at inference time.
+Returns the latest snapshot published to Redis for the requested driver.
 
 ```bash
 curl "http://localhost:8080/features/online?entity_id=d1"
@@ -106,59 +117,26 @@ curl "http://localhost:8080/features/online?entity_id=d1"
 {
   "entity_id": "d1",
   "features": {
-    "avg_fare": 10.75,
-    "avg_trip_duration_minutes": 15,
-    "trip_count": 2
-  }
-}
-```
-
-```bash
-curl "http://localhost:8080/features/online?entity_id=d2"
-```
-
-```json
-{
-  "entity_id": "d2",
-  "features": {
-    "avg_fare": 18.875,
-    "avg_trip_duration_minutes": 26,
-    "trip_count": 2
-  }
-}
-```
-
-```bash
-curl "http://localhost:8080/features/online?entity_id=d3"
-```
-
-```json
-{
-  "entity_id": "d3",
-  "features": {
-    "avg_fare": 8.25,
-    "avg_trip_duration_minutes": 10,
+    "avg_fare": 30,
+    "avg_trip_duration_minutes": 24,
     "trip_count": 1
   }
 }
 ```
 
-Returns `404` if `entity_id` is missing from the query string. Returns `200` with `"features": {}` if the entity has no data in Redis.
-
----
+Returns `404` when the query omits `entity_id` and `200` with `"features": {}` when Redis has no snapshot for the driver. The historical TTL applies to as-of joins. Redis serves the last value published for each driver until the next update.
 
 ### POST /features/historical
 
-Point-in-time correct feature retrieval from Parquet — use this to build training datasets. The `event_timestamp` must be within 24h of when `cmd/materialize` was run (the feature view TTL).
+For each event, the API selects the newest snapshot with a timestamp at or before the event and an age of at most 24 hours. The 24-hour TTL comes from the registry and is relative to the event timestamp. Historical queries can use any date covered by the input data.
 
 ```bash
 curl -X POST http://localhost:8080/features/historical \
   -H "Content-Type: application/json" \
   -d '{
     "entity_events": [
-      {"entity_id": "d1", "event_timestamp": "2026-05-23T15:00:00Z"},
-      {"entity_id": "d2", "event_timestamp": "2026-05-23T15:00:00Z"},
-      {"entity_id": "d3", "event_timestamp": "2026-05-23T15:00:00Z"}
+      {"entity_id": "d1", "event_timestamp": "2025-01-01T11:00:00Z"},
+      {"entity_id": "d1", "event_timestamp": "2025-01-01T12:00:00Z"}
     ]
   }'
 ```
@@ -168,77 +146,29 @@ curl -X POST http://localhost:8080/features/historical \
   "training_rows": [
     {
       "entity_id": "d1",
-      "event_timestamp": "2026-05-23T15:00:00Z",
-      "features": {
-        "avg_fare": 10.75,
-        "avg_trip_duration_minutes": 15,
-        "trip_count": 2
-      }
+      "event_timestamp": "2025-01-01T11:00:00Z",
+      "features": {"avg_fare": 10.75, "avg_trip_duration_minutes": 15, "trip_count": 2}
     },
     {
-      "entity_id": "d2",
-      "event_timestamp": "2026-05-23T15:00:00Z",
-      "features": {
-        "avg_fare": 18.875,
-        "avg_trip_duration_minutes": 26,
-        "trip_count": 2
-      }
-    },
-    {
-      "entity_id": "d3",
-      "event_timestamp": "2026-05-23T15:00:00Z",
-      "features": {
-        "avg_fare": 8.25,
-        "avg_trip_duration_minutes": 10,
-        "trip_count": 1
-      }
+      "entity_id": "d1",
+      "event_timestamp": "2025-01-01T12:00:00Z",
+      "features": {"avg_fare": 24, "avg_trip_duration_minutes": 30, "trip_count": 1}
     }
   ]
 }
 ```
 
-Returns `400` on malformed JSON. Returns `"features": {}` for events where no valid feature row exists (leakage guard or TTL exceeded).
+Returns `400` on malformed JSON. Events without an eligible snapshot return `"features": {}`. The response follows request order.
 
----
-
-### Example: generate a training set
-
-```bash
-go run examples/generate_training_set.go
-```
-
-Loads the registry and offline Parquet store, calls `GetHistoricalFeatures` for d1, d2, d3 with `EventTimestamp = time.Now()`, and prints each `TrainingRow` as formatted JSON.
-
-## Tests
+## Tests and scaling
 
 ```bash
 go test ./... -v
 ```
 
-28 tests pass without Redis (4 top-level test functions, 24 table-driven cases):
+The suite covers registry validation, Parquet round trips, point-in-time join rules, and a CSV-to-Parquet-to-HTTP regression test. The Redis storage and offline/online consistency tests run when Redis is available at `localhost:6379`.
 
-| Test function | Cases | What it covers |
-|---|---|---|
-| `TestLoad` | 4 | Registry loading: valid config, missing file, malformed YAML, invalid TTL duration |
-| `TestValidate` | 11 | Registry validation: entity name, join key, duplicates, feature view fields, unknown entity ref |
-| `TestOfflineRoundTrip` | 3 | Parquet write → read: single row, multiple rows with mixed types, empty slice |
-| `TestPointInTime` | 6 | Point-in-time join: basic join, no leakage, TTL filter, latest-wins, no match, multiple entities |
-
-With Redis running (`docker compose up -d`), 9 additional tests run:
-
-| Test function | Cases | What it covers |
-|---|---|---|
-| `TestOnlineStore` | 4 | Redis Set/Get round-trip, missing key returns empty map, MGet mixed, overwrite |
-| `TestConsistency` | 3 | After `Materialize`, offline (Parquet) and online (Redis) values match for d1, d2, d3 |
-
-## Performance
-
-Point-in-time join over 100,000 feature rows (10,000 entities) with 1,000 entity events:
-- Join completed in: 63ms
-- Heap delta: -0.4 MB
-- Design note: current implementation loads all Parquet rows into memory. For production scale, partitioning by entity_id and predicate pushdown would reduce both latency and memory usage.
-
-Spark materialization (groupBy + Parquet write): 0.88s over 9.5M rows on a single-node local Spark session.
+The scale test exercises 100,000 feature rows and 1,000 request events. Each request still scans the whole Parquet file in batches. The join retains request events and their current best matches as it scans, so it can answer from histories larger than the set of rows it needs to keep in memory.
 
 ## Intentional scope
 

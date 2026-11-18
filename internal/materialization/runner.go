@@ -3,12 +3,15 @@ package materialization
 import (
 	"fmt"
 	"path/filepath"
+	"time"
 
 	"github.com/Raditya0902/mini-feature-store/internal/offline"
 	"github.com/Raditya0902/mini-feature-store/internal/online"
 	"github.com/Raditya0902/mini-feature-store/internal/registry"
 )
 
+// Materialize rebuilds the offline history from the input. A nil onlineStore
+// skips publishing snapshots to Redis.
 func Materialize(
 	reg *registry.Registry,
 	store *offline.ParquetStore,
@@ -36,7 +39,22 @@ func Materialize(
 		return fmt.Errorf("writing offline store: %w", err)
 	}
 
+	if onlineStore == nil {
+		return nil
+	}
+
+	now := time.Now()
+	latest := make(map[string]offline.FeatureRow)
 	for _, row := range rows {
+		if row.FeatureTimestamp.After(now) {
+			continue
+		}
+		previous, exists := latest[row.EntityID]
+		if !exists || row.FeatureTimestamp.After(previous.FeatureTimestamp) {
+			latest[row.EntityID] = row
+		}
+	}
+	for _, row := range latest {
 		if err := onlineStore.Set(row.EntityID, row.Values); err != nil {
 			return fmt.Errorf("writing online store for %q: %w", row.EntityID, err)
 		}

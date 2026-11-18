@@ -36,11 +36,13 @@ func main() {
 
 	store := &offline.ParquetStore{BasePath: "."}
 
-	now := time.Now().UTC()
+	jan1 := time.Date(2025, time.January, 1, 0, 0, 0, 0, time.UTC)
 	entityEvents := []historical.EntityEvent{
-		{EntityID: "d1", EventTimestamp: now},
-		{EntityID: "d2", EventTimestamp: now},
-		{EntityID: "d3", EventTimestamp: now},
+		{EntityID: "d1", EventTimestamp: jan1.Add(10*time.Hour + 59*time.Minute)},
+		{EntityID: "d1", EventTimestamp: jan1.Add(11 * time.Hour)},
+		{EntityID: "d1", EventTimestamp: jan1.Add(12 * time.Hour)},
+		{EntityID: "d1", EventTimestamp: jan1.Add(36*time.Hour + time.Second)},
+		{EntityID: "d1", EventTimestamp: jan1.Add(60 * time.Hour)},
 	}
 
 	rows, err := historical.GetHistoricalFeatures(store, *view, entityEvents)

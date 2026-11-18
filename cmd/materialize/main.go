@@ -1,6 +1,7 @@
 package main
 
 import (
+	"flag"
 	"fmt"
 	"os"
 
@@ -18,6 +19,10 @@ const (
 )
 
 func main() {
+	input := flag.String("input", rawDataPath, "path to the timestamped taxi CSV")
+	offlineOnly := flag.Bool("offline-only", false, "rebuild Parquet history without publishing to Redis")
+	flag.Parse()
+
 	reg, err := registry.Load(registryPath)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "materialize: loading registry: %v\n", err)
@@ -25,9 +30,12 @@ func main() {
 	}
 
 	store := &offline.ParquetStore{BasePath: parquetBase}
-	onlineStore := online.NewRedisStore(redisAddr)
+	var onlineStore *online.RedisStore
+	if !*offlineOnly {
+		onlineStore = online.NewRedisStore(redisAddr)
+	}
 
-	if err := materialization.Materialize(reg, store, onlineStore, rawDataPath); err != nil {
+	if err := materialization.Materialize(reg, store, onlineStore, *input); err != nil {
 		fmt.Fprintf(os.Stderr, "materialize: %v\n", err)
 		os.Exit(1)
 	}

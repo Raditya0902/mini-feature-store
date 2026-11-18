@@ -4,6 +4,7 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"sort"
 	"strconv"
@@ -18,6 +19,13 @@ type driverAcc struct {
 	totalTripDuration float64
 }
 
+type driverWindow struct {
+	driverID string
+	end      time.Time
+}
+
+// GenerateDriverStats emits one snapshot per nonempty UTC hour and driver.
+// A snapshot becomes available at the end of that hour.
 func GenerateDriverStats(rawPath string) ([]offline.FeatureRow, error) {
 	f, err := os.Open(rawPath)
 	if err != nil {
@@ -37,7 +45,7 @@ func GenerateDriverStats(rawPath string) ([]offline.FeatureRow, error) {
 		colIndex[col] = i
 	}
 
-	for _, required := range []string{"driver_id", "fare_amount", "trip_duration_minutes"} {
+	for _, required := range []string{"driver_id", "fare_amount", "trip_duration_minutes", "completed_at"} {
 		if _, ok := colIndex[required]; !ok {
 			return nil, fmt.Errorf("missing required column %q", required)
 		}
@@ -46,8 +54,9 @@ func GenerateDriverStats(rawPath string) ([]offline.FeatureRow, error) {
 	idxDriverID := colIndex["driver_id"]
 	idxFare := colIndex["fare_amount"]
 	idxDuration := colIndex["trip_duration_minutes"]
+	idxCompletedAt := colIndex["completed_at"]
 
-	accumulators := make(map[string]*driverAcc)
+	accumulators := make(map[driverWindow]*driverAcc)
 
 	for lineNum := 2; ; lineNum++ {
 		row, err := r.Read()
@@ -59,50 +68,55 @@ func GenerateDriverStats(rawPath string) ([]offline.FeatureRow, error) {
 		}
 
 		driverID := row[idxDriverID]
+		completedAt, err := time.Parse(time.RFC3339Nano, row[idxCompletedAt])
+		if err != nil {
+			return nil, fmt.Errorf("row %d: invalid completed_at: %w", lineNum, err)
+		}
 
 		fare, err := strconv.ParseFloat(row[idxFare], 64)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "taxi_features: skipping row %d: invalid fare_amount %q: %v\n", lineNum, row[idxFare], err)
+		if err != nil || math.IsNaN(fare) || math.IsInf(fare, 0) {
+			fmt.Fprintf(os.Stderr, "taxi_features: skipping row %d: invalid fare_amount %q\n", lineNum, row[idxFare])
 			continue
 		}
 
 		duration, err := strconv.ParseFloat(row[idxDuration], 64)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "taxi_features: skipping row %d: invalid trip_duration_minutes %q: %v\n", lineNum, row[idxDuration], err)
+		if err != nil || math.IsNaN(duration) || math.IsInf(duration, 0) {
+			fmt.Fprintf(os.Stderr, "taxi_features: skipping row %d: invalid trip_duration_minutes %q\n", lineNum, row[idxDuration])
 			continue
 		}
 
-		acc, ok := accumulators[driverID]
+		window := driverWindow{driverID: driverID, end: completedAt.UTC().Truncate(time.Hour).Add(time.Hour)}
+		acc, ok := accumulators[window]
 		if !ok {
 			acc = &driverAcc{}
-			accumulators[driverID] = acc
+			accumulators[window] = acc
 		}
 		acc.tripCount++
 		acc.totalFare += fare
 		acc.totalTripDuration += duration
 	}
 
-	if len(accumulators) == 0 {
-		return []offline.FeatureRow{}, nil
+	windows := make([]driverWindow, 0, len(accumulators))
+	for window := range accumulators {
+		windows = append(windows, window)
 	}
+	sort.Slice(windows, func(i, j int) bool {
+		if windows[i].driverID == windows[j].driverID {
+			return windows[i].end.Before(windows[j].end)
+		}
+		return windows[i].driverID < windows[j].driverID
+	})
 
-	driverIDs := make([]string, 0, len(accumulators))
-	for id := range accumulators {
-		driverIDs = append(driverIDs, id)
-	}
-	sort.Strings(driverIDs)
-
-	ts := time.Now().UTC().Truncate(time.Second)
-	rows := make([]offline.FeatureRow, len(driverIDs))
-	for i, id := range driverIDs {
-		acc := accumulators[id]
+	rows := make([]offline.FeatureRow, len(windows))
+	for i, window := range windows {
+		acc := accumulators[window]
 		count := float64(acc.tripCount)
 		rows[i] = offline.FeatureRow{
-			EntityID:         id,
-			FeatureTimestamp: ts,
+			EntityID:         window.driverID,
+			FeatureTimestamp: window.end,
 			Values: map[string]any{
-				"trip_count":              count,
-				"avg_fare":                acc.totalFare / count,
+				"trip_count":                count,
+				"avg_fare":                  acc.totalFare / count,
 				"avg_trip_duration_minutes": acc.totalTripDuration / count,
 			},
 		}
